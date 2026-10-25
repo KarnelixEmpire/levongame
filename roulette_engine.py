@@ -1,7 +1,11 @@
 """
 Cò quay Nga cho bản web online. Tiền là tiền ảo, lưu trong từng bàn.
 Luật: ổ có 6 phòng, chọn số viên đạn (1-5). Mỗi lượt bấm cò, ổ xoay một phòng.
-Trúng đạn thì bị loại. Người cuối cùng còn sống nhận tiền cược của những người bị loại.
+Trúng đạn thì bị loại.
+
+Chơi lẻ: người cuối cùng còn sống thắng.
+Chơi theo đội: đội cuối cùng còn người sống thắng, các thành viên đội thắng chia tiền.
+Mỗi người thua trả đúng tiền cược.
 """
 import random
 from typing import List, Optional
@@ -21,6 +25,7 @@ class RPlayer:
         self.name = name
         self.money = START_CHIPS
         self.alive = True
+        self.team: Optional[str] = None
         self.ws = None
 
     @property
@@ -31,7 +36,7 @@ class RPlayer:
 class RouletteRoom:
     kind = "russian"
 
-    def __init__(self, code: str, host: str, bullets: int, bet: int):
+    def __init__(self, code: str, host: str, bullets: int, bet: int, team_mode: bool = False):
         if not 1 <= bullets <= 5:
             raise GameError("Số viên đạn phải từ 1 đến 5.")
         if not 1000 <= bet <= MAX_WEB_BET:
@@ -40,6 +45,7 @@ class RouletteRoom:
         self.host = host
         self.bullets = bullets
         self.bet = bet
+        self.team_mode = team_mode
         self.players: List[RPlayer] = []
         self.state = "lobby"      # lobby | playing | ended
         self.turn = 0
@@ -77,6 +83,20 @@ class RouletteRoom:
         self.players.append(RPlayer(pid, name))
         self._log(f"{name} đã vào bàn.")
 
+    def set_team(self, pid: str, team: Optional[str]) -> None:
+        if self.state == "playing":
+            raise GameError("Không đổi đội khi ván đang diễn ra.")
+        if not self.team_mode:
+            raise GameError("Bàn này không chơi theo đội.")
+        if team not in ("A", "B"):
+            raise GameError("Đội phải là A hoặc B.")
+        p = self.player(pid)
+        if not p:
+            raise GameError("Bạn chưa vào bàn.")
+        if p.team != team:
+            p.team = team
+            self._log(f"{p.name} vào Đội {team}.")
+
     def remove(self, pid: str) -> None:
         if self.state == "playing":
             raise GameError("Ván đang diễn ra, không thể rời lúc này.")
@@ -95,6 +115,12 @@ class RouletteRoom:
             raise GameError("Ván đã bắt đầu rồi.")
         if len(self.players) < MIN_PLAYERS:
             raise GameError(f"Cần ít nhất {MIN_PLAYERS} người để bắt đầu.")
+        if self.team_mode:
+            teams = {p.team for p in self.players}
+            if None in teams:
+                raise GameError("Mọi người phải chọn đội A hoặc B trước khi bắt đầu.")
+            if teams != {"A", "B"}:
+                raise GameError("Cần có người ở cả Đội A và Đội B.")
         for p in self.players:
             if p.money < self.bet:
                 raise GameError(f"{p.name} không đủ {self.bet:,} VNĐ để cược.")
@@ -114,6 +140,16 @@ class RouletteRoom:
             i = (i + 1) % n
         self.turn = i
 
+    def _winners_now(self) -> Optional[List[RPlayer]]:
+        alive = [x for x in self.players if x.alive]
+        if self.team_mode:
+            if alive and len({x.team for x in alive}) == 1:
+                return alive
+            return None
+        if len(alive) == 1:
+            return alive
+        return None
+
     def pull(self, pid: str) -> None:
         if self.state != "playing":
             raise GameError("Ván chưa bắt đầu hoặc đã kết thúc.")
@@ -125,10 +161,10 @@ class RouletteRoom:
             p.alive = False
             self._log(f"💥 {p.name} trúng đạn, bị loại.")
             self._reload()
-            alive = [x for x in self.players if x.alive]
-            if len(alive) == 1:
+            winners = self._winners_now()
+            if winners:
                 self.ptr = (self.ptr + 1) % CHAMBERS
-                self._settle(alive[0])
+                self._settle(winners)
                 return
         else:
             self.spent.add(self.ptr)
@@ -137,25 +173,30 @@ class RouletteRoom:
         self.ptr = (self.ptr + 1) % CHAMBERS
         self._advance()
 
-    def _settle(self, winner: RPlayer) -> None:
+    def _settle(self, winners: List[RPlayer]) -> None:
+        winner_ids = {w.pid for w in winners}
         gained, losers = 0, []
         for other in self.players:
-            if other is winner:
+            if other.pid in winner_ids:
                 continue
             pay = min(self.bet, other.money)
             other.money -= pay
             gained += pay
             losers.append([other.name, pay])
-        winner.money += gained
+        share = gained // len(winners)
+        for w in winners:
+            w.money += share
+        winners[0].money += gained - share * len(winners)
         self.state = "ended"
         self.result = {
             "type": "win",
-            "winner": winner.name,
-            "winner_pid": winner.pid,
+            "winners": [w.name for w in winners],
+            "winner_pid": winners[0].pid,
             "gained": gained,
             "losers": losers,
         }
-        self._log(f"🏆 {winner.name} thắng, nhận +{gained:,} VNĐ.")
+        names = ", ".join(w.name for w in winners)
+        self._log(f"🏆 {names} thắng, nhận +{gained:,} VNĐ.")
 
     def end_early(self, pid: str) -> None:
         if pid != self.host:
@@ -172,6 +213,7 @@ class RouletteRoom:
         return {
             "code": self.code,
             "kind": self.kind,
+            "team_mode": self.team_mode,
             "state": self.state,
             "host": self.host,
             "you": you,
@@ -186,6 +228,7 @@ class RouletteRoom:
                 {
                     "pid": p.pid,
                     "name": p.name,
+                    "team": p.team,
                     "money": p.money,
                     "alive": p.alive,
                     "online": p.online,

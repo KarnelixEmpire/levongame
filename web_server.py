@@ -33,6 +33,7 @@ PUBLIC_URL = os.environ.get("PUBLIC_URL", f"http://localhost:{PORT}").rstrip("/"
 DISCORD_CLIENT_ID = os.environ.get("DISCORD_CLIENT_ID", "1557745642841968723")
 DISCORD_CLIENT_SECRET = os.environ.get("DISCORD_CLIENT_SECRET", "")
 REDIRECT_URI = PUBLIC_URL + "/auth/callback"
+FRONT_URL = os.environ.get("FRONT_URL", PUBLIC_URL).rstrip("/")  # trang web gọi máy chủ này, ví dụ https://levon-game.vercel.app
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("web")
@@ -169,9 +170,31 @@ def _finish(room) -> None:
 # =========================================================
 # Đăng nhập Discord (OAuth2, scope identify)
 # =========================================================
+def _sid_from(request: web.Request) -> str:
+    auth = request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:]
+    return request.query.get("sid", "")
+
+
 def _session(request: web.Request):
-    sid = request.cookies.get("levon_sid")
+    sid = _sid_from(request)
     return SESSIONS.get(sid) if sid else None
+
+
+@web.middleware
+async def cors_mw(request: web.Request, handler):
+    if request.method == "OPTIONS":
+        resp = web.Response(status=204)
+    else:
+        try:
+            resp = await handler(request)
+        except web.HTTPException as e:
+            resp = e
+    resp.headers["Access-Control-Allow-Origin"] = FRONT_URL
+    resp.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type"
+    resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    return resp
 
 
 async def auth_login(request: web.Request):
@@ -222,8 +245,7 @@ async def auth_callback(request: web.Request):
     name = (me.get("global_name") or me.get("username") or "Người chơi")[:20]
     sid = secrets.token_urlsafe(24)
     SESSIONS[sid] = {"pid": "d:" + str(me["id"]), "name": name}
-    resp = web.HTTPFound("/#/online")
-    resp.set_cookie("levon_sid", sid, max_age=60 * 60 * 24 * 30, httponly=True, samesite="Lax")
+    resp = web.HTTPFound(f"{FRONT_URL}/#/online?sid={sid}")
     resp.del_cookie("levon_state")
     raise resp
 
@@ -234,11 +256,8 @@ async def auth_me(request: web.Request):
 
 
 async def auth_logout(request: web.Request):
-    sid = request.cookies.get("levon_sid")
-    SESSIONS.pop(sid, None)
-    resp = web.json_response({"ok": True})
-    resp.del_cookie("levon_sid")
-    return resp
+    SESSIONS.pop(_sid_from(request), None)
+    return web.json_response({"ok": True})
 
 
 # =========================================================
@@ -282,7 +301,7 @@ async def ws_handler(request: web.Request) -> web.StreamResponse:
 
 
 def make_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[cors_mw])
     app.router.add_get("/", index)
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/auth/login", auth_login)

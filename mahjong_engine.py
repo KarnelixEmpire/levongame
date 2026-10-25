@@ -2,6 +2,9 @@
 Luật mạt chược dùng cho bản web online.
 Không phụ thuộc Discord. Mỗi quân bài là một chuỗi:
   m1..m9 = Vạn, p1..p9 = Đồng, s1..s9 = Sách, z1..z7 = Chữ (Đông, Nam, Tây, Bắc, Trung, Phát, Bạch)
+
+Chế độ ghép đội: 2 đội A và B. Người thắng được chia tiền cho cả đội,
+người ở đội đối phương trả tiền, đồng đội không trả tiền.
 """
 import random
 from collections import Counter
@@ -91,7 +94,8 @@ class Player:
         self.money = START_MONEY
         self.hand: List[str] = []
         self.discards: List[str] = []
-        self.ws = None  # kết nối WebSocket hiện tại, None nếu đã ngắt
+        self.team: Optional[str] = None   # "A" | "B" | None (chơi lẻ)
+        self.ws = None                    # kết nối WebSocket hiện tại, None nếu đã ngắt
 
     @property
     def online(self) -> bool:
@@ -101,9 +105,10 @@ class Player:
 class Room:
     kind = "mahjong"
 
-    def __init__(self, code: str, host: str):
+    def __init__(self, code: str, host: str, team_mode: bool = False):
         self.code = code
         self.host = host
+        self.team_mode = team_mode
         self.players: List[Player] = []
         self.state = "lobby"      # lobby | playing | ended
         self.wall: List[str] = []
@@ -136,6 +141,20 @@ class Room:
         self.players.append(Player(pid, name))
         self._log(f"{name} đã vào bàn.")
 
+    def set_team(self, pid: str, team: Optional[str]) -> None:
+        if self.state == "playing":
+            raise GameError("Không đổi đội khi ván đang diễn ra.")
+        if not self.team_mode:
+            raise GameError("Bàn này không chơi theo đội.")
+        if team not in ("A", "B"):
+            raise GameError("Đội phải là A hoặc B.")
+        p = self.player(pid)
+        if not p:
+            raise GameError("Bạn chưa vào bàn.")
+        if p.team != team:
+            p.team = team
+            self._log(f"{p.name} vào Đội {team}.")
+
     def remove(self, pid: str) -> None:
         if self.state == "playing":
             raise GameError("Ván đang diễn ra, không thể rời lúc này.")
@@ -154,6 +173,12 @@ class Room:
             raise GameError("Ván đã bắt đầu rồi.")
         if len(self.players) < MIN_PLAYERS:
             raise GameError(f"Cần ít nhất {MIN_PLAYERS} người để bắt đầu.")
+        if self.team_mode:
+            teams = {p.team for p in self.players}
+            if None in teams:
+                raise GameError("Mọi người phải chọn đội A hoặc B trước khi bắt đầu.")
+            if teams != {"A", "B"}:
+                raise GameError("Cần có người ở cả Đội A và Đội B.")
         self.wall = build_deck(len(self.players))
         for p in self.players:
             p.hand = [self.wall.pop() for _ in range(13)]
@@ -201,6 +226,11 @@ class Room:
         self.turn = (self.turn + 1) % len(self.players)
         self.phase = "draw"
 
+    def _winners_of(self, winner: Player) -> List[Player]:
+        if winner.team is None:
+            return [winner]
+        return [p for p in self.players if p.team == winner.team]
+
     def _settle(self, winner: Player) -> None:
         yaku = find_yaku(winner.hand)
         per_loser = PAYOUT_PER_YAKU * len(yaku)
@@ -208,21 +238,28 @@ class Room:
         for other in self.players:
             if other is winner:
                 continue
+            if winner.team is not None and other.team == winner.team:
+                continue  # đồng đội không trả tiền
             pay = min(per_loser, other.money)
             other.money -= pay
             gained += pay
             losers.append([other.name, pay])
-        winner.money += gained
+        winners = self._winners_of(winner)
+        share = gained // len(winners)
+        for w in winners:
+            w.money += share
+        winners[0].money += gained - share * len(winners)  # phần dư (nếu có) cho người thắng
         self.state = "ended"
         self.result = {
             "type": "win",
-            "winner": winner.name,
+            "winners": [w.name for w in winners],
             "winner_pid": winner.pid,
             "yaku": yaku,
             "gained": gained,
             "losers": losers,
         }
-        self._log(f"{winner.name} TSUMO! Nhận +{gained:,} VNĐ.")
+        names = ", ".join(w.name for w in winners)
+        self._log(f"{names} TSUMO! Nhận +{gained:,} VNĐ.")
 
     # ---- dữ liệu gửi cho trình duyệt ----
     def view(self, you: str) -> dict:
@@ -231,6 +268,7 @@ class Room:
         return {
             "code": self.code,
             "kind": self.kind,
+            "team_mode": self.team_mode,
             "state": self.state,
             "host": self.host,
             "you": you,
@@ -241,6 +279,7 @@ class Room:
                 {
                     "pid": p.pid,
                     "name": p.name,
+                    "team": p.team,
                     "money": p.money,
                     "discards": p.discards,
                     "count": len(p.hand),

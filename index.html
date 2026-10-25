@@ -7,7 +7,7 @@
 <meta name="description" content="Levon Games: bot Mạt chược Riichi cho Discord và các trò chơi nhóm vui cùng bạn bè.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;700&family=Be+Vietnam+Pro:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@700&display=swap" rel="stylesheet">
 <style>
 :root{
@@ -15,8 +15,8 @@
   --ivory:#f4ecd8; --ink:#1d1a14; --red:#c8372d; --gold:#e0b45a;
   --discord:#5865f2; --discord-deep:#3a45b3;
   --text:#ece6d2; --muted:#a6c4b7; --line:rgba(244,236,216,.16);
-  --display:'Fraunces',Georgia,'Times New Roman',serif;
-  --body:'Be Vietnam Pro',system-ui,-apple-system,'Segoe UI',sans-serif;
+  --display:'Exo 2','Segoe UI',system-ui,sans-serif;
+  --body:'Exo 2','Segoe UI',system-ui,sans-serif;
   --han:'Noto Serif TC','Songti TC','SimSun',serif;
 }
 *{margin:0;padding:0;box-sizing:border-box}
@@ -44,6 +44,12 @@ section{padding:96px 0}
 .nav-links a.active{color:var(--gold)}
 .nav-links .nav-cta{background:var(--discord);color:#fff;font-weight:600}
 .nav-links .nav-cta:hover{background:#6b77f5;color:#fff}
+
+.check{display:flex;align-items:center;gap:10px;font-weight:500;color:var(--ivory);cursor:pointer}
+.check input{width:18px;height:18px;accent-color:var(--gold)}
+.nav-login{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:10px;background:var(--discord);color:#fff;font-weight:600;font-size:.95rem;text-decoration:none}
+.nav-login:hover{background:#6b77f5}
+.nav-user{padding:8px 12px;border-radius:10px;color:var(--gold);font-size:.95rem;font-weight:600}
 
 /* ---------- Nút ---------- */
 .btn{display:inline-flex;align-items:center;gap:10px;padding:14px 26px;border-radius:12px;font:600 1rem var(--body);text-decoration:none;border:0;cursor:pointer;transition:transform .2s,background .2s,border-color .2s,box-shadow .2s}
@@ -176,7 +182,7 @@ footer{border-top:1px solid var(--line);padding:28px 0;text-align:center;font-si
 .cursor-dot{position:fixed;top:0;left:0;width:14px;height:14px;margin:-7px 0 0 -7px;border-radius:50%;background:#fff;mix-blend-mode:difference;pointer-events:none;z-index:9999;opacity:0;transition:width .25s ease,height .25s ease,margin .25s ease,opacity .2s}
 .cursor-dot.on{opacity:1}
 .cursor-dot.big{width:52px;height:52px;margin:-26px 0 0 -26px}
-html.has-cursor,html.has-cursor *{cursor:none!important}
+
 
 /* Bài rơi nền */
 .fall{position:fixed;inset:0;overflow:hidden;pointer-events:none;z-index:0}
@@ -274,7 +280,7 @@ input[type=text]{width:100%;padding:12px 14px;border-radius:12px;border:1px soli
     <div class="nav-links">
       <a href="#/" data-nav="home"><svg class="i"><use href="#i-home"/></svg> Trang chủ</a>
       <a href="#/danh-muc" data-nav="danh-muc"><svg class="i"><use href="#i-grid"/></svg> Categories</a>
-      <a class="nav-cta" href="https://discord.gg/D296TrMKFz" target="_blank" rel="noopener"><svg class="i fill"><use href="#i-discord"/></svg> Discord</a>
+      <span id="nav-auth"></span>
     </div>
   </div>
 </nav>
@@ -341,7 +347,7 @@ const CATEGORIES = [
    ĐỊNH TUYẾN (hash)
    ========================================================= */
 function parseRoute() {
-  return location.hash.replace(/^#\/?/, '').split('/').filter(Boolean);
+  return location.hash.split('?')[0].replace(/^#\/?/, '').split('/').filter(Boolean);
 }
 
 function setActiveNav(name) {
@@ -904,16 +910,32 @@ const tileEmoji = c => TILE_EMOJI[c[0]][+c[1] - 1];
 const tileName = c => (c[0] === 'z' ? ZNAME[+c[1] - 1] : `${c[1]} ${SNAME[c[0]]}`);
 const money = n => n.toLocaleString('vi-VN');
 
+// Địa chỉ máy chủ chơi online (chạy web_server.py).
+// Để trống nếu trang do chính máy chủ đó phục vụ. Nếu trang đặt ở Vercel thì điền địa chỉ máy chủ, ví dụ:
+// const ONLINE_SERVER = 'https://levon-online.example.com';
+const ONLINE_SERVER = '';
+
+function serverHttp() {
+  if (ONLINE_SERVER) return ONLINE_SERVER.replace(/\/+$/, '');
+  if (location.protocol === 'http:' || location.protocol === 'https:') return location.origin;
+  return 'http://localhost:8080';
+}
+function serverWs() {
+  return serverHttp().replace(/^http/, 'ws') + '/ws';
+}
+
 const MO = {
   ws: null,
   online: false,
   user: null,                                   // tên tài khoản Discord, null nếu là khách
+  sid: localStorage.getItem('levon_sid') || '',  // mã phiên đăng nhập Discord
   url: localStorage.getItem('levon_server') || '',
   token: localStorage.getItem('levon_token') || '',
   name: localStorage.getItem('levon_name') || '',
   code: localStorage.getItem('levon_room') || '',
   codeInput: '',
   game: 'mahjong',
+  teams: false,
   bullets: 1,
   bet: 10000,
   room: null,
@@ -923,10 +945,31 @@ if (!MO.token) {
   MO.token = Date.now().toString(36) + Math.random().toString(36).slice(2);
   localStorage.setItem('levon_token', MO.token);
 }
-if (!MO.url) {
-  MO.url = (location.protocol === 'http:' || location.protocol === 'https:')
-    ? (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws'
-    : 'ws://localhost:8080/ws';
+if (!MO.url) MO.url = serverWs();
+
+// Nhận mã phiên sau khi đăng nhập Discord xong (địa chỉ dạng #/online?sid=...)
+function captureSid() {
+  const h = location.hash;
+  const q = h.indexOf('?');
+  if (q < 0) return;
+  const sid = new URLSearchParams(h.slice(q + 1)).get('sid');
+  if (sid) {
+    MO.sid = sid;
+    localStorage.setItem('levon_sid', sid);
+  }
+  history.replaceState(null, '', location.pathname + h.slice(0, q));
+}
+
+function authHeaders() {
+  return MO.sid ? { Authorization: 'Bearer ' + MO.sid } : {};
+}
+
+function navAuthPaint() {
+  const el = $('#nav-auth');
+  if (!el) return;
+  el.innerHTML = MO.user
+    ? `<span class="nav-user">${escapeHtml(MO.user)}</span>`
+    : `<a class="nav-login" href="${serverHttp()}/auth/login">${icon('i-discord', 'i fill')}Đăng nhập</a>`;
 }
 
 function viewOnline() {
@@ -942,10 +985,15 @@ function viewOnline() {
 }
 
 function moCheckLogin() {
-  fetch('/auth/me', { credentials: 'same-origin' })
+  fetch(serverHttp() + '/auth/me', { headers: authHeaders() })
     .then(r => (r.ok ? r.json() : null))
-    .then(j => { MO.user = j && j.logged_in ? j.name : null; moPaint(); })
-    .catch(() => { MO.user = null; moPaint(); });
+    .then(j => {
+      MO.user = j && j.logged_in ? j.name : null;
+      if (!MO.user) { MO.sid = ''; localStorage.removeItem('levon_sid'); }
+      navAuthPaint();
+      moPaint();
+    })
+    .catch(() => { MO.user = null; navAuthPaint(); moPaint(); });
 }
 
 function moConnect() {
@@ -953,7 +1001,8 @@ function moConnect() {
   const sep = MO.url.includes('?') ? '&' : '?';
   let ws;
   try {
-    ws = new WebSocket(MO.url + sep + 'token=' + encodeURIComponent(MO.token));
+    const sidPart = MO.sid ? '&sid=' + encodeURIComponent(MO.sid) : '';
+    ws = new WebSocket(MO.url + sep + 'token=' + encodeURIComponent(MO.token) + sidPart);
   } catch (e) {
     MO.error = 'Địa chỉ máy chủ không hợp lệ.';
     moPaint();
@@ -1025,7 +1074,7 @@ function moPaint() {
 function moLobbyHTML(offline) {
   const login = MO.user
     ? `<div class="mo-login">Đã đăng nhập: <b>${escapeHtml(MO.user)}</b> <button class="btn btn-ghost btn-sm" id="mo-logout">Đăng xuất</button></div>`
-    : `<div class="mo-login"><a class="btn btn-discord btn-sm" href="/auth/login">${icon('i-discord', 'i fill')}Đăng nhập bằng Discord</a> <span class="hint">hoặc nhập tên để chơi khách</span></div>`;
+    : `<div class="mo-login"><a class="btn btn-discord btn-sm" href="${serverHttp()}/auth/login">${icon('i-discord', 'i fill')}Đăng nhập bằng Discord</a> <span class="hint">hoặc nhập tên để chơi khách</span></div>`;
   const nameField = MO.user ? '' : `
       <label>Tên của bạn
         <input type="text" id="mo-name" maxlength="20" placeholder="Nhập tên" value="${escapeHtml(MO.name)}">
@@ -1052,6 +1101,7 @@ function moLobbyHTML(offline) {
           <option value="russian" ${MO.game === 'russian' ? 'selected' : ''}>Cò quay Nga</option>
         </select>
       </label>
+      <label class="check"><input type="checkbox" id="mo-teams" ${MO.teams ? 'checked' : ''}> Chơi theo đội (Đội A và Đội B)</label>
       ${rouletteOpts}
       <div class="row2">
         <div style="display:grid;gap:8px;align-content:start">
@@ -1081,6 +1131,7 @@ function moBindLobby() {
     localStorage.setItem('levon_name', MO.name);
   });
   $('#mo-game').addEventListener('change', e => { MO.game = e.target.value; moPaint(); });
+  $('#mo-teams').addEventListener('change', e => { MO.teams = e.target.checked; });
   const bullets = $('#mo-bullets');
   if (bullets) bullets.addEventListener('change', e => { MO.bullets = +e.target.value; });
   const bet = $('#mo-bet');
@@ -1094,8 +1145,14 @@ function moBindLobby() {
   $('#mo-code').addEventListener('input', e => { MO.codeInput = e.target.value.trim().toUpperCase(); });
   const logout = $('#mo-logout');
   if (logout) logout.addEventListener('click', () => {
-    fetch('/auth/logout', { method: 'POST', credentials: 'same-origin' })
-      .finally(() => { MO.user = null; moPaint(); });
+    fetch(serverHttp() + '/auth/logout', { method: 'POST', headers: authHeaders() })
+      .finally(() => {
+        MO.user = null;
+        MO.sid = '';
+        localStorage.removeItem('levon_sid');
+        navAuthPaint();
+        moPaint();
+      });
   });
   $('#mo-create').addEventListener('click', () => {
     if (!MO.user && !MO.name) { MO.error = 'Hãy nhập tên của bạn.'; return moPaint(); }
@@ -1104,7 +1161,7 @@ function moBindLobby() {
       return moPaint();
     }
     moConnect();
-    moSend({ type: 'create', game: MO.game, bullets: MO.bullets, bet: MO.bet, name: MO.name });
+    moSend({ type: 'create', game: MO.game, bullets: MO.bullets, bet: MO.bet, team_mode: MO.teams, name: MO.name });
   });
   $('#mo-join').addEventListener('click', () => {
     if (!MO.user && !MO.name) { MO.error = 'Hãy nhập tên của bạn.'; return moPaint(); }
@@ -1120,15 +1177,24 @@ function moBanner(r) {
   if (!r.result) return '';
   if (r.result.type === 'win') {
     const losers = r.result.losers.map(([n, a]) => `➖ ${escapeHtml(n)}: −${money(a)} VNĐ`).join('<br>');
-    return `<div class="banner"><b>🏆 ${escapeHtml(r.result.winner)} thắng</b><span>${losers || ''}</span><span>💰 +${money(r.result.gained)} VNĐ cho người thắng</span></div>`;
+    return `<div class="banner"><b>🏆 ${escapeHtml(r.result.winners.join(', '))} thắng</b><span>${losers || ''}</span><span>💰 +${money(r.result.gained)} VNĐ cho người thắng</span></div>`;
   }
   if (r.result.type === 'draw') return `<div class="banner"><b>🤝 Ván hòa</b><span>Đã hết quân trên tường.</span></div>`;
   if (r.result.type === 'early') return `<div class="banner"><b>🤝 Ván kết thúc sớm</b><span>Không ai mất tiền.</span></div>`;
   return '';
 }
 
+function teamTag(p) {
+  return p.team ? ` <small>[Đội ${p.team}]</small>` : '';
+}
+
 function moCommonButtons(r, isHost) {
   const out = [];
+  if (r.team_mode && r.state !== 'playing') {
+    const mine = r.players.find(p => p.pid === r.you);
+    out.push(`<button class="btn ${mine && mine.team === 'A' ? 'btn-gold' : 'btn-ghost'} btn-sm" id="mo-team-A">Đội A</button>`);
+    out.push(`<button class="btn ${mine && mine.team === 'B' ? 'btn-gold' : 'btn-ghost'} btn-sm" id="mo-team-B">Đội B</button>`);
+  }
   if (isHost && r.state !== 'playing' && r.players.length >= 2) {
     out.push(`<button class="btn btn-gold" id="mo-start">${r.state === 'ended' ? 'Ván mới' : 'Bắt đầu'}</button>`);
   }
@@ -1164,7 +1230,7 @@ function moRouletteHTML(r, offline) {
     if (playing && p.pid === r.turn) marks.push('▶');
     if (p.pid === r.host) marks.push('👑');
     if (!p.online) marks.push('(mất kết nối)');
-    const you = p.pid === me ? ' <small>(bạn)</small>' : '';
+    const you = (p.pid === me ? ' <small>(bạn)</small>' : '') + teamTag(p);
     return `<div class="pl ${playing && p.pid === r.turn ? 'now' : ''} ${p.alive ? '' : 'out'}">
       <span class="name">${marks.join(' ')} ${escapeHtml(p.name)}${you}</span>
       <span class="meta">💰 ${money(p.money)} VNĐ • ${p.alive ? 'Còn sống' : 'Đã loại'}</span>
@@ -1221,7 +1287,7 @@ function moMahjongHTML(r, offline) {
     if (playing && p.pid === r.turn) marks.push('▶');
     if (p.pid === r.host) marks.push('👑');
     if (!p.online) marks.push('(mất kết nối)');
-    const you = p.pid === me ? ' <small>(bạn)</small>' : '';
+    const you = (p.pid === me ? ' <small>(bạn)</small>' : '') + teamTag(p);
     const discards = p.discards.length ? p.discards.map(tileEmoji).join(' ') : '<em>chưa đánh quân nào</em>';
     return `<div class="pl ${playing && p.pid === r.turn ? 'now' : ''}">
       <span class="name">${marks.join(' ')} ${escapeHtml(p.name)}${you}</span>
@@ -1272,6 +1338,10 @@ function moBindRoom() {
   if (start) start.addEventListener('click', () => moSend({ type: 'start' }));
   const end = $('#mo-end');
   if (end) end.addEventListener('click', () => moSend({ type: 'end' }));
+  const tA = $('#mo-team-A');
+  if (tA) tA.addEventListener('click', () => moSend({ type: 'team', team: 'A' }));
+  const tB = $('#mo-team-B');
+  if (tB) tB.addEventListener('click', () => moSend({ type: 'team', team: 'B' }));
   $('#mo-leave').addEventListener('click', () => {
     moSend({ type: 'leave' });
     MO.room = null;
@@ -1284,24 +1354,29 @@ function moBindRoom() {
 /* =========================================================
    CON TRỎ, BÀI RƠI, NHẠC (dùng chung mọi trang)
    ========================================================= */
+captureSid();
 window.addEventListener('hashchange', render);
 render();
+moCheckLogin();
 
-// Con trỏ chấm tròn (chỉ trên máy có chuột)
-const cursor = document.createElement('div');
-cursor.className = 'cursor-dot';
-cursor.id = 'cursor';
-document.body.prepend(cursor);
+// Con trỏ hình quân mạt chược (chỉ trên máy có chuột)
 if (window.matchMedia('(hover:hover) and (pointer:fine)').matches) {
+  const tileSvg = (stroke) =>
+    `<svg xmlns="http://www.w3.org/2000/svg" width="28" height="38" viewBox="0 0 28 38">` +
+    `<rect x="2" y="2" width="24" height="34" rx="5" fill="#f4ecd8" stroke="${stroke}" stroke-width="2.5"/>` +
+    `<text x="14" y="27" font-size="18" text-anchor="middle" fill="#c8372d" font-family="serif">中</text></svg>`;
+  const toCursor = (svg, fallback) =>
+    `url("data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}") 14 19, ${fallback}`;
+  const normal = toCursor(tileSvg('#2c8a68'), 'auto');
+  const pointer = toCursor(tileSvg('#e0b45a'), 'pointer');
+  const st = document.createElement('style');
+  st.textContent =
+    `html.has-cursor, html.has-cursor * { cursor: ${normal} !important; }` +
+    `html.has-cursor a, html.has-cursor button, html.has-cursor select, html.has-cursor input,` +
+    `html.has-cursor textarea, html.has-cursor audio, html.has-cursor .tile, html.has-cursor .cat-card` +
+    `{ cursor: ${pointer} !important; }`;
+  document.head.appendChild(st);
   document.documentElement.classList.add('has-cursor');
-  document.addEventListener('mousemove', e => {
-    cursor.style.transform = `translate(${e.clientX}px,${e.clientY}px)`;
-    cursor.classList.add('on');
-  });
-  document.addEventListener('mouseleave', () => cursor.classList.remove('on'));
-  document.addEventListener('mouseover', e => {
-    cursor.classList.toggle('big', !!e.target.closest('a,button,select,textarea,audio,input,.tile,.cat-card'));
-  });
 }
 
 // Bài mạt chược rơi nền

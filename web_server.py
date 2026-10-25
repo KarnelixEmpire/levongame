@@ -99,11 +99,12 @@ async def handle(ws, msg: dict, ident: dict) -> None:
         if not name:
             raise GameError("Hãy nhập tên của bạn.")
         game = msg.get("game", "mahjong")
+        team_mode = bool(msg.get("team_mode", False))
         code = new_code()
         if game == "russian":
-            room = RouletteRoom(code, pid, int(msg.get("bullets", 1)), int(msg.get("bet", 10000)))
+            room = RouletteRoom(code, pid, int(msg.get("bullets", 1)), int(msg.get("bet", 10000)), team_mode)
         elif game == "mahjong":
-            room = Room(code, pid)
+            room = Room(code, pid, team_mode)
         else:
             raise GameError("Trò chơi không hợp lệ.")
         ROOMS[code] = room
@@ -137,6 +138,8 @@ async def handle(ws, msg: dict, ident: dict) -> None:
         room = _room_of(ws)
         if kind == "start":
             room.start(pid)
+        elif kind == "team":
+            room.set_team(pid, msg.get("team"))
         elif kind == "draw":
             if room.kind != "mahjong":
                 raise GameError("Bàn này không có thao tác rút bài.")
